@@ -1,0 +1,201 @@
+---
+title: "谁是冷场王"
+author: "天才唐"
+date: "2015年11月2日"
+output: html_document
+---
+
+
+读取EMIT群的聊天记录(2014-11-02 06:12:05 ~ 2015-10-30 11:37:44)，进行预处理，将时间拆分表示，精确到分钟，并把昵称简化为英文形式，忽略聊天的具体容，将处理完成后的数据读取入表格。
+```{r echo=FALSE}
+setwd("/Users/GeniusTang/Desktop/Cold King")
+record <- read.table("EMIT.txt", header=T)
+```
+
+表格的前10行以及整个表格的简单总结：
+```{r echo=FALSE}
+record[1:10,]
+message_time <- table(record$name)
+name_vector <- names(message_time)
+```
+总记录天数为363天，总发言数为`r nrow(record)`, 可以发现瑞哥的话是最多的(3025)，而罗导是最含蓄的(677)。
+```{r echo=FALSE}
+message_bar <- barplot(message_time, names.arg=as.character(name_vector), ylab='number of messages', main='number of messages of every one', ylim=c(0,3500))
+text(x=message_bar, y=message_time + 100, labels=as.character(message_time))
+```
+
+画出每个月的总消息数的柱状图，可以看出消息数多的月份并不是大家聚在一起的月份，而是在其前后的月份。比如14年12月大家聚集在LA，因此并不需要微信沟通，相反在12月前后因为要商量行程以及分离后过分思念彼此（有点肉麻）微信消息数显著上升。8, 9月份同理。
+```{r echo=FALSE}
+month_name <- c(11,12,c(1:10))
+month_time <- table(record$month)[month_name]
+month_bar <- barplot(month_time, names.arg=as.character(month_name), main="Total messages every month", ylab="number of messsages", ylim=c(0,2000))
+text(x=month_bar, y=month_time + 50, labels=as.character(month_time))
+```
+
+从小时方面看，每天最活跃的是太平洋时间的4pm-8pm，此时为东部时间的7pm-11pm，北京时间的7am-11am，刚好是最可能全部群成员都在线的时间。三个巨大的降幅分别出现在太平洋时间的的8pm-9pm，0am-1am，9am-10am，也对应着东部11pm-12pm，西部0am-1am，中国0am-1am。正好是三个地区的入睡时间，从入睡时间的差异也可以看出群内东部的成员睡觉比较早。如果按照所有人8点起床，那么红色部分代表所有人都在线的时间，橘黄色代表两个时区的人在线的时间，绿色代表只有一个时间的人在线的时间，柱状图颜色的深浅与高度基本吻合。
+```{r echo=FALSE}
+color <- c('green', 'orange', 'red')
+west <- c(array(1, 1), array(0, 7), array(1, 16))
+east <- c(array(0, 5), array(1, 16), array(0, 3))
+china <- c(array(1,10), array(0, 7), array(1, 7))
+#china <- c(array(1,16), array())
+hour_time <- table(record$hour)
+hour_bar <- barplot(hour_time, names.arg=names(table), main="Total messages every hour", ylab="number of messsages", ylim=c(0,1200), axes=TRUE, col=color[west+east+china])
+text(x=hour_bar, y=hour_time+50, labels=as.character(hour_time), cex=0.7)
+
+```
+
+重新整理数据，以第一条消息为起始时间，计算之后每天消息的时间，以分钟为单位，并按照('he', 'li', 'luo', 'ma', 'qian', 'qiao', 'tang', 'yang')的顺序给姓名编号，整理好后的表格前10行如下：
+```{r echo=FALSE}
+month <- c(0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30)
+cum_month <- cumsum(month)
+minute <- (((record$year - 2014) * 365 + cum_month[record$month] + record$day) * 24 * 60 + 
+  record$hour * 60 + record$minute)
+minute <- minute - min(minute)
+
+record_new <- data.frame(minute, name=record$name)
+
+
+for(i in c(1:nrow(record_new))){
+  record_new$id[i] <- which(name_vector == record_new$name[i])
+}
+record_new[1:10,]
+```
+
+**对“话题”以及“冷场次数”的定义：**
+
+定义一个时间常量$Cold$，同时初始化一个话题计数器$COUNTER=0$，每当一个人发消息，计数器加1($COUNTER += 1$)直到在某个人发完消息后$Cold$时间内没有人回复则判定最后发言的那个人冷场，此次话题终止，$COUNTER$记录了这次话题中所有人发言的总次数，我们定义为这次话题的热度($Popularity$)。同时下一个话题开始，直到$Cold$间隔内没人发言，那么再次判定最后发言的人冷场。在此报告中指定$Cold = 90$，也就是1个半小时内没人回复定为冷场。
+
+对表格进行遍历和统计，得到一个$ColdMatrix$，其中记录了每个人在每一个话题中的发言数，前10个话题的统计结果如下：
+```{r echo=FALSE}
+COLDTIMER <- 90
+all_topic_size <- c()
+cold_user <- c()
+topic_start_times <- c(0)
+topic_end_times <- c()
+user_size <- matrix(0, nrow=length(name_vector))
+
+current_topic_size <- 1
+new_user_size <- array(0, length(name_vector))
+new_user_size[record_new$id[1]] <- new_user_size[record_new$id[1]] + 1
+for(i in c(2:nrow(record_new))){
+  if((record_new$minute[i] - record_new$minute[i-1]>COLDTIMER)){
+    user_size <- cbind(user_size, c(new_user_size))
+    all_topic_size <- c(all_topic_size, current_topic_size)
+    cold_user <- c(cold_user, record_new$id[i-1])
+    topic_end_times <- c(topic_end_times, record_new$minute[i-1])
+    new_user_size <- array(0, length(name_vector))
+    current_topic_size <- 0
+    topic_start_times <- c(topic_start_times, record_new$minute[i])
+  }
+  new_user_size[record_new$id[i]] <- new_user_size[record_new$id[i]] + 1
+  current_topic_size <- current_topic_size + 1
+}
+user_size <- cbind(user_size, c(new_user_size))
+all_topic_size <- c(all_topic_size, current_topic_size)
+cold_user <- c(cold_user, record_new$id[i-1])
+topic_end_times <- c(topic_end_times, record_new$minute[i-1])
+    
+user_size <- user_size[,2:ncol(user_size)]
+data.frame(user_size[,1:10], row.names=name_vector)
+```
+
+同时保存一个记录每个话题热度的数组$TopicSize$，前10个话题的热度如下：
+```{r echo=FALSE}
+all_topic_size[1:10]
+```
+
+还保存一个数组$ColdMan$记录每个话题的冷场者，前10个话题的冷场者如下：
+```{r echo=FALSE}
+name_vector[cold_user[1:10]]
+```
+
+最后统计得到的话题总数为`r length(cold_user)`，话题热度的分布如下，大部分话题热度不超过50：
+
+```{r echo=FALSE}
+top3 <- sort(all_topic_size, decreasing=TRUE)[1:3]
+hist(all_topic_size, breaks=20, main="Topic Popularity Distribution",
+     xlab="Popularity", ylab="Times")
+```
+
+最热的三个话题的热度分别为`r top3`，发生时间，冷场时间，终结时间，话题起始者，话题冷场者分别为：
+```{r echo=FALSE}
+for(i in c(1:length(top3))){
+  print(paste("top", as.character(i)))
+  print('Start Time:')
+  start <- record[which(record_new$minute == topic_start_times[which(all_topic_size == top3[i])]),]
+  print(start[1,])
+  print('End Time:')
+  end <- record[which(record_new$minute == topic_end_times[which(all_topic_size == top3[i])]),]
+  print(end[nrow(end), ])
+  print('-------------------------------------------------------')
+}
+```
+按照所示时间返回原文件查找话题内容，最大的话题是由2015年2月17号晚上发红包引起的，终止于Gina的一张晒红包的图片。第二大的话题是由2015年10月29号讨论初中经典瞬间引起的，终止于我的一句“sqq老是穿老马球衣”。第三大的话题起始于2015年5月19号瑞哥商量去腿哥家玩的计划，由一句“发现一个规律。。跟罗导有过故事的女人，都或多或少向娱乐圈靠拢或者已经在其中。。”发展为讨论香港三级片，最后由Gina的一句毫不相关的“第一次尝试鸡蛋仔成功”终结。
+
+每个人的冷场次数如下，可见瑞哥冷场次数最多，但就这样认为瑞哥是冷场王并不合理，因为瑞哥发的消息数和参与的话题数也最多，所以冷场次数多也是情理之中，但并不能说瑞哥很冷场。
+
+```{r echo=FALSE}
+cold_times <- table(cold_user)
+cold_bar <- barplot(cold_times, names.arg=name_vector, ylim=c(0,200),
+        ylab="Cold times", main="Cold times for everyone")
+text(x=cold_bar, y=cold_times+5, labels=as.character(cold_times))
+```
+
+因此我们需要定义一个冷场指数 **$ColdIndex$** 来综合考虑每个人的冷场次数，冷场话题的热度(冷场的话题越热，冷场指数越高)，他在话题中的发言数（如果一个人在一个话题中只说了1句话就成功终结了这个话题，那么我只能说你太冷了），以及他参与的总话题数。
+$$ColdIndex_{i} = \frac{\sum\limits_{j=1}^{873}\frac{Popularity_{j}}{ColdMatrix(i, j)}
+I_{\{ColdMan(j)=i\}}}{TopicTimes(i)}$$
+其中$Popularity_{j}$表示第$j$个话题的热度；$ColdMatrix(i, j)$表示第$i$个人在第$j$个话题中的发言数；$I_{\{ColdMan(j)=i\}}=1$如果第$j$个话题是由$i$终结的，要不然为0；$TopicTimes(i)$表示$i$参与话题的总数。
+
+每个人的冷场指数如下，李导一鸣惊人，你猜到了吗？对$ColdIndex$的直观理解：如果某人$ColdIndex$为3表示在他参与的每个话题中，他平均只需要说$n$句话就能终结一个热度为$3n$的话题。
+
+```{r echo=FALSE}
+topic_times <- array(0, length(name_vector))
+for(i in c(1:length(name_vector))){
+  topic_times[i] <- sum(user_size[i,] > 0)
+}
+
+cold_index <- array(0, length(name_vector))
+for(i in c(1:length(all_topic_size))){
+  cold <- cold_user[i]
+  cold_index[cold] <- cold_index[cold] + all_topic_size[i] / user_size[cold, i]
+}
+cold_index <- cold_index / topic_times
+
+index_bar <- barplot(cold_index, names.arg = name_vector, ylim=c(0,5),
+        main="Cold Index for everyone", ylab="Cold Index")
+text(x=index_bar, y=cold_index+0.5, labels=as.character(round(cold_index,2)))
+```
+
+**恭喜李导成功当选为冷场王！！！！**
+----------------------------------------------
+
+我们不妨再来分析一些别的好玩的东西，既然我们已经有了$ColdMatrix$记录了每个人在每个话题中的发言数，那么我们就可以知道哪些人更倾向于在同一个话题中发言，也就是说两个人参与话题的相似程度。计算$ColdMatrix$中每两行之间的余弦系数($Cosine Similarity$)。得到下表，数字越大表示这两个人在每个话题中的参与度更相似。同时也计算每个人和其他所有人的话题参与度的余弦系数（"others"列）。数字越大表示这个人是群内话题的引领者，数字越小表示这个人喜欢自言自语。
+```{r echo=FALSE}
+cosine <- function(user1, user2){
+  return(round(sum(user1*user2) / sqrt(sum(user1^2)*sum(user2^2)), 4))
+}
+
+correlation <- matrix(0, nrow=length(name_vector), ncol=length(name_vector)+1)
+for(i in c(1:length(name_vector))){
+  for(j in c(i:length(name_vector))){
+    correlation[i,j] <- cosine(user_size[i, ], user_size[j,])
+    correlation[i, 9] <- cosine(user_size[i, ], all_topic_size-user_size[i,] - user_size[i, ])
+    #correlation[i,j] <- round(cor(user_size[i,], user_size[j,]), 4)
+    correlation[j,i] <- correlation[i,j]
+  }
+  
+}
+x<- data.frame(correlation, row.names=name_vector)
+names(x) <- c(name_vector, 'others')
+x
+```
+由该表可以看出话题最相似的几对（瑞哥，小马），（瑞哥，帅哥），（腿哥，太子），（小马，我），（Gina，我）。感觉除了（腿哥，太子）这一对以外都很有道理，但他们这一对我是真冒想明白为什么相似度这么高。
+
+观察"others"列，我们可以发现瑞哥，小马，Gina，李导都低于0.4，属于自言自语爱好者，而太子，我，腿腿和帅哥则是话题的引领者，毕竟咱是Emit乐队正规成员。
+
+```
+所有分析到此结束，纯属娱乐，请勿深究和打我。
+
+本文仅供Emit微信群内部分享交流，请勿外流。
+```
